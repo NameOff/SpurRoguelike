@@ -27,11 +27,12 @@ namespace SpurRoguelike.PlayerBot
     {
         private readonly int panicHealthLimit;
         private State<PlayerBot> state;
-        private Entity objective;
+        public int Level;
 
         public PlayerBot()
         {
-            panicHealthLimit = 70;
+            Level = 1;
+            panicHealthLimit = 65;
             state = new StateIdle(this);
         }
 
@@ -39,6 +40,14 @@ namespace SpurRoguelike.PlayerBot
         {
             //Thread.Sleep(100);
             return state.Tick(levelView);
+        }
+
+        private static StepDirection GetNextStepDirection(List<Location> path, LevelView levelView)
+        {
+            if (path == null)
+                throw new ArgumentNullException();
+            var nextLocation = path.First();
+            return DetermineStepDirection(levelView.Player.Location, nextLocation);
         }
 
         private static StepDirection DetermineStepDirection(Location playerLocation, Location newLocation)
@@ -57,13 +66,6 @@ namespace SpurRoguelike.PlayerBot
         private static Location GetExit(LevelView levelView)
         {
             return levelView.Field.GetCellsOfType(CellType.Exit).First();
-        }
-
-        private static StepDirection GetNextStepDirectionTo(Location location, LevelView levelView)
-        {
-            var path = GetPath(levelView.Player.Location, location, levelView);
-            var nextLocation = path.First();
-            return DetermineStepDirection(levelView.Player.Location, nextLocation);
         }
 
         private static Location[] GetNeighbors(Location location, LevelView levelView)
@@ -98,14 +100,20 @@ namespace SpurRoguelike.PlayerBot
             return result;
         }
 
-
-
-        private static bool IsSafe(Location location, LevelView levelView)
+        private static bool IsPossibleForMove(Location location, LevelView levelView)
         {
             if (levelView.Field[location] == CellType.Trap || levelView.Field[location] == CellType.Wall)
                 return false;
             return levelView.Monsters.All(monster => monster.Location != location) &&
                    levelView.Items.All(item => item.Location != location);
+        }
+
+        private static bool IsSafe(Location location, LevelView levelView)
+        {
+            if (!IsPossibleForMove(location, levelView))
+                return false;
+            var dangerousLocations = GetMonstersAttackingLocations(levelView);
+            return !dangerousLocations.Contains(location);
         }
 
         private static Location FindNearestMonster(LevelView levelView)
@@ -126,6 +134,16 @@ namespace SpurRoguelike.PlayerBot
                        .Select(loc => loc - playerLocation)
                        .OrderBy(offset => Math.Abs(offset.XOffset) + Math.Abs(offset.YOffset))
                        .First();
+        }
+
+        private static List<Location> GetSafePath(Location start, Location end, LevelView levelView)
+        {
+            return GetPath(start, end, levelView, IsSafe);
+        }
+
+        private static List<Location> GetShortestPath(Location start, Location end, LevelView levelView)
+        {
+            return GetPath(start, end, levelView, IsPossibleForMove);
         }
 
         private static AttackDirection GetAttackDirectionFrom(Offset offset)
@@ -169,6 +187,23 @@ namespace SpurRoguelike.PlayerBot
                     .ToList();
         }
 
+        private static List<Location> GetSortedHealthPackLocations(LevelView levelView)
+        {
+            var playerLocation = levelView.Player.Location;
+            return levelView.HealthPacks.Select(health => health.Location)
+                .Select(loc => loc - playerLocation)
+                .OrderBy(offset => Math.Abs(offset.XOffset) + Math.Abs(offset.YOffset))
+                .Select(offset => playerLocation + offset)
+                .ToList();
+        }
+
+        private static List<PawnView> GetMonstersInSightRadius(int sightRadius, LevelView levelView)
+        {
+            return levelView.Monsters
+                .Where(monster => levelView.Player.Location.IsInRange(monster.Location, sightRadius))
+                .ToList();
+        }
+
         private static HashSet<Location> GetMonstersAttackingLocations(LevelView levelView)
         {
             var monstersAtackingLocations = levelView.Monsters
@@ -178,7 +213,7 @@ namespace SpurRoguelike.PlayerBot
             return new HashSet<Location>(monstersAtackingLocations);
         }
 
-        private static List<Location> GetPath(Location start, Location end, LevelView levelView)
+        private static List<Location> GetPath(Location start, Location end, LevelView levelView, Func<Location, LevelView, bool> isPossibleForMoveLocation)
         {
             var dict = new Dictionary<Location, Location>();
             var queue = new Queue<Location>();
@@ -195,7 +230,7 @@ namespace SpurRoguelike.PlayerBot
                         dict[neighbor] = currentLocation;
                         return CreatePath(dict, end);
                     }
-                    if (visited.Contains(neighbor) || !IsSafe(neighbor, levelView))
+                    if (visited.Contains(neighbor) || !isPossibleForMoveLocation(neighbor, levelView))
                         continue;
                     dict[neighbor] = currentLocation;
                     queue.Enqueue(neighbor);
@@ -220,20 +255,14 @@ namespace SpurRoguelike.PlayerBot
 
         private class StateIdle : State<PlayerBot>
         {
+
             public StateIdle(PlayerBot self) : base(self)
             {
             }
 
             public override Turn Tick(LevelView levelView)
             {
-                var bestItem = FindBestItem(levelView);
-                ItemView item;
-                StepDirection direction;
-                if (!levelView.Player.TryGetEquippedItem(out item) || CalculateItemValue(item) < CalculateItemValue(bestItem))
-                {
-                    direction = GetNextStepDirectionTo(bestItem.Location, levelView);
-                    return Turn.Step(direction);
-                }
+                List<Location> path;
                 var monstersInAttackRange = MonstersInPlayerRange(levelView);
                 if (monstersInAttackRange.Length == 1)
                 {
@@ -245,18 +274,30 @@ namespace SpurRoguelike.PlayerBot
                     GoToState(() => new StateCowering(Self));
                     return Self.state.Tick(levelView);
                 }
-                if (levelView.Player.Health < 90 && levelView.HealthPacks.Any())
+                if (levelView.Player.Health < Self.panicHealthLimit && levelView.HealthPacks.Any())
                 {
                     GoToState(() => new StateFear(Self));
                     return Self.state.Tick(levelView);
                 }
+                var bestItem = FindBestItem(levelView);
+                ItemView item;
+                if (!levelView.Player.TryGetEquippedItem(out item) || CalculateItemValue(item) < CalculateItemValue(bestItem))
+                {
+                    path = GetShortestPath(levelView.Player.Location, bestItem.Location, levelView);
+                    return path == null ? Turn.None : Turn.Step(GetNextStepDirection(path, levelView));
+                }
+                if (levelView.Player.Health != 100 && levelView.HealthPacks.Any())
+                {
+                    path = GetShortestPath(levelView.Player.Location, FindNearestHealthPack(levelView), levelView);
+                    return Turn.Step(GetNextStepDirection(path, levelView));
+                }
                 if (!levelView.Monsters.Any())
                 {
-                    direction = GetNextStepDirectionTo(GetExit(levelView), levelView);
-                    return Turn.Step(direction);
+                    path = GetShortestPath(levelView.Player.Location, GetExit(levelView), levelView);
+                    return path == null ? Turn.None : Turn.Step(GetNextStepDirection(path, levelView));
                 }
-                direction = GetNextStepDirectionTo(FindNearestMonster(levelView), levelView);
-                return Turn.Step(direction);
+                path = GetShortestPath(levelView.Player.Location, FindNearestMonster(levelView), levelView);
+                return path == null ? Turn.None : Turn.Step(GetNextStepDirection(path, levelView));
             }
 
             public override void GoToState<TState>(Func<TState> factory)
@@ -281,24 +322,33 @@ namespace SpurRoguelike.PlayerBot
                 }
                 if (monstersInAttackRange.Length > 1)
                 {
+                    var path = GetSafePath(levelView.Player.Location, GetExit(levelView), levelView);
+                    if (path != null)
+                    {
+                        var dir = GetNextStepDirection(path, levelView);
+                        return Turn.Step(dir);
+                    }
                     var monstersAttackingLocations = GetMonstersAttackingLocations(levelView);
                     var neighbors = GetNeighbors(levelView.Player.Location, levelView)
-                        .Where(loc => IsSafe(loc, levelView) && !monstersAttackingLocations.Contains(loc))
+                        .Where(loc => IsPossibleForMove(loc, levelView) && !monstersAttackingLocations.Contains(loc))
                         .ToList();
                     if (neighbors.Any())
                         return Turn.Step(DetermineStepDirection(levelView.Player.Location, neighbors[0]));
-                    else
+                    if (levelView.Player.Health < Self.panicHealthLimit && levelView.HealthPacks.Any())
                     {
-                        if (levelView.Player.Health < Self.panicHealthLimit && levelView.HealthPacks.Any())
+                        foreach (var healthPackLocation in GetSortedHealthPackLocations(levelView))
                         {
-                            GoToState(() => new StateFear(Self));
-                            return Self.state.Tick(levelView);
+                            var safePath = GetSafePath(levelView.Player.Location, healthPackLocation, levelView);
+                            if (safePath != null)
+                                return Turn.Step(GetNextStepDirection(safePath, levelView));
                         }
-                        var monsters = GetAdjacentMonsters(levelView);
-                        var loc = GetWeakestMonster(monsters, levelView);
-                        var direction = GetAttackDirectionFrom(loc - levelView.Player.Location);
-                        return Turn.Attack(direction);
+                        GoToState(() => new StateFear(Self));
+                        return Self.state.Tick(levelView);
                     }
+                    var monsters = GetAdjacentMonsters(levelView);
+                    var location = GetWeakestMonster(monsters, levelView);
+                    var direction = GetAttackDirectionFrom(location - levelView.Player.Location);
+                    return Turn.Attack(direction);
                 }
                 GoToState(() => new StateIdle(Self));
                 return Self.state.Tick(levelView);
@@ -351,30 +401,13 @@ namespace SpurRoguelike.PlayerBot
 
             public override Turn Tick(LevelView levelView)
             {
-                if (levelView.Player.Health > 90)
+                if (levelView.Player.Health > 90 || !levelView.HealthPacks.Any())
                 {
                     GoToState(() => new StateIdle(Self));
                     return Self.state.Tick(levelView);
                 }
-                var direction = GetNextStepDirectionTo(FindNearestHealthPack(levelView), levelView);
-                return Turn.Step(direction);
-            }
-
-            public override void GoToState<TState>(Func<TState> factory)
-            {
-                Self.state = factory();
-            }
-        }
-
-        private class StateGoToObjective : State<PlayerBot>
-        {
-            public StateGoToObjective(PlayerBot self) : base(self)
-            {
-            }
-
-            public override Turn Tick(LevelView levelView)
-            {
-                throw new NotImplementedException();
+                var path = GetShortestPath(levelView.Player.Location, FindNearestHealthPack(levelView), levelView);
+                return path == null ? Turn.None : Turn.Step(GetNextStepDirection(path, levelView));
             }
 
             public override void GoToState<TState>(Func<TState> factory)
