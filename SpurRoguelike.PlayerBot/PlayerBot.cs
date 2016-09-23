@@ -35,7 +35,7 @@ namespace SpurRoguelike.PlayerBot
 
         public PlayerBot()
         {
-            Level = 1;
+            Level = 0;
             exit = new Dictionary<int, Location>();
             panicHealthLimit = 70;
             //MaxLevel = 5;
@@ -45,6 +45,8 @@ namespace SpurRoguelike.PlayerBot
         public Turn MakeTurn(LevelView levelView, IMessageReporter messageReporter)
         {
             this.levelView = levelView;
+            if (levelView.Field[levelView.Player.Location] == CellType.PlayerStart)
+                Level++;
             if (IsLastLevel())
                 panicHealthLimit = 60;
             return state.Tick();
@@ -85,6 +87,7 @@ namespace SpurRoguelike.PlayerBot
         {
             if (exit.ContainsKey(Level))
                 return exit[Level];
+            var a = levelView.Field.GetCellsOfType(CellType.Exit);
             var location = levelView.Field.GetCellsOfType(CellType.Exit).First();
             exit[Level] = location;
             return exit[Level];
@@ -443,8 +446,6 @@ namespace SpurRoguelike.PlayerBot
                 if (!Self.levelView.Monsters.Any())
                 {
                     path = Self.GetShortestPath(loc => loc == Self.GetExit());
-                    if (path != null && path.Count == 1)
-                        Self.Level++;
                     return path == null ? Turn.None : Turn.Step(Self.GetNextStepDirection(path));
                 }
                 path = Self.GetShortestPath(loc => Self.levelView.GetMonsterAt(loc).HasValue) ?? Self.GetShortestPath(loc => loc == Self.GetExit());
