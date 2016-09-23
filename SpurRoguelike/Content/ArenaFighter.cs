@@ -262,10 +262,7 @@ namespace SpurRoguelike.Content
                     if (Self.objective is HealthPack)
                         return true;
 
-                    var seenHealth = Self.Level.HealthPacks
-                        .Where(i => Self.IsInRange(i, Self.sightRadius))
-                        .OrderBy(i => (i.Location - Self.Location).Size())
-                        .FirstOrDefault();
+                    var seenHealth = Self.Level.HealthPacks.Where(i => Self.IsInRange(i, Self.sightRadius)).OrderBy(i => (i.Location - Self.Location).Size()).FirstOrDefault();
 
                     if (seenHealth != null)
                     {
