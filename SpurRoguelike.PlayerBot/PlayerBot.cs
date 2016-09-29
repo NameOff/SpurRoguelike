@@ -41,8 +41,7 @@ namespace SpurRoguelike.PlayerBot
                 exit = GetExit();
             if (IsLastLevel())
                 panicHealthLimit = 55;
-            if (levelView.Player.Location == new Location(34, 34))
-            { }
+            //Console.ReadKey();
             return state.Tick();
         }
 
@@ -202,12 +201,13 @@ namespace SpurRoguelike.PlayerBot
         private int CalculateLocationCost(Location location, HashSet<Location> monsterAttackLocations)
         {
 
-            var cost = 1;
-            if (monsterAttackLocations.Contains(location))
-                cost += 10;
+            var cost = 0;
+            //if (monsterAttackLocations.Contains(location))
+            //    cost += 5;
             if (levelView.GetMonsterAt(location).HasValue || levelView.GetItemAt(location).HasValue
                 || levelView.Field[location] == CellType.Trap || levelView.Field[location] == CellType.Wall)
                 cost += 100000;
+
             var neighbors = GetNeighbors(location);
             var wallsCount = 0;
             foreach (var neighbor in neighbors)
@@ -215,46 +215,96 @@ namespace SpurRoguelike.PlayerBot
                 if (levelView.Field[neighbor] == CellType.Wall || levelView.Field[neighbor] == CellType.Trap)
                     wallsCount++;
             }
-            if (wallsCount > 1)
-                cost += 50 * wallsCount;
+            cost += 10 * wallsCount;
+
+            if (!IsLastLevel())
+            {
+                //var neighbors = Offset.AttackOffsets.Select(offset => location + offset).Where(IsLocationInRange);
+                
+                foreach (var monster in levelView.Monsters)
+                {
+                    var monsterLoc = monster.Location;
+                    var offset = monsterLoc - location;
+                    var max = offset.Size();
+                    if (max > 5)
+                        continue;
+                    cost += (int) Math.Pow(2, 6 - max);
+                    if (Math.Abs(offset.XOffset) == 1 && Math.Abs(offset.YOffset) == 1)
+                        cost += (int) Math.Pow(2, 6 - max);
+                }
+                //if (wallsCount > 1)
+            }
+            else
+            {
+                foreach (var monsterAttackLocation in monsterAttackLocations)
+                {
+                    if (location == monsterAttackLocation)
+                        cost += 10;
+                }
+                cost++;
+            }
             return cost;
         }
 
 
-        private Tuple<Dictionary<Location, int>, Dictionary<Location, Location>> Dijkstra() // Actually it is not Dijkstra :D
+        private Tuple<Dictionary<Location, int>, Dictionary<Location, Location>> Dijkstra()
         {
             var start = levelView.Player.Location;
             var distance = new Dictionary<Location, int>();
+            //for (var x = 0; x < levelView.Field.Width; x++)
+            //    for (var y = 0; y < levelView.Field.Height; y++)
+            //        distance[new Location(x, y)] = 9000000; //TODO
+
+            var hashes = new Dictionary<int, Location>();
             for (var x = 0; x < levelView.Field.Width; x++)
                 for (var y = 0; y < levelView.Field.Height; y++)
-                    distance[new Location(x, y)] = int.MaxValue;
+                {
+                    var loc = new Location(x, y);
+                    distance[loc] = int.MaxValue;
+                    hashes[loc.GetHashCode()] = loc;
+                }
             distance[start] = 0;
             var previous = new Dictionary<Location, Location> { [start] = start };
-            var queue = new Queue<Location>();
+            //var queue = new Queue<Location>();
+            var queue = new SortedSet<Tuple<int, int>>();
+
             var visited = new HashSet<Location>();
             var monsterAttackLocations = new HashSet<Location>(GetMonstersAttackingLocations());
-            queue.Enqueue(start);
+            queue.Add(Tuple.Create(0, start.GetHashCode()));
             while (queue.Any())
             {
-                var current = queue.Dequeue();
+                var node = queue.Min;
+                var current = hashes[node.Item2];
+                queue.Remove(node);
                 if (visited.Contains(current))
                     continue;
-                var neighbors = GetNeighbors(current).OrderBy(loc => distance[loc]);
+                visited.Add(current);
+                var neighbors = GetNeighbors(current);
                 foreach (var neighbor in neighbors)
                 {
-                    if (visited.Contains(neighbor) || (distance[current] > 100000 && distance[current] < int.MaxValue))
+                    if (visited.Contains(neighbor))
                         continue;
                     var cost = CalculateLocationCost(neighbor, monsterAttackLocations);
                     if (distance[neighbor] > cost + distance[current])
                     {
+                        queue.Remove(Tuple.Create(distance[neighbor], neighbor.GetHashCode()));
                         distance[neighbor] = cost + distance[current];
                         previous[neighbor] = current;
+                        queue.Add(Tuple.Create(distance[neighbor], neighbor.GetHashCode()));
                     }
-                    queue.Enqueue(neighbor);
                 }
-                visited.Add(current);
+                //visited.Add(current);
             }
             distance.Remove(start);
+            /*
+            var test = new Dictionary<Location, int>();
+            foreach (var key in distance.Keys)
+            {
+                test[key] = CalculateLocationCost(key, monsterAttackLocations);
+            }
+            HtmlGenerator.WriteHtml(levelView, test, @"C:\Users\Администратор\Downloads\HtmlGenerator\result\index.html"); //TODO DELETE
+            */
+
             return Tuple.Create(distance, previous);
         }
 
@@ -298,6 +348,39 @@ namespace SpurRoguelike.PlayerBot
             return a.IsInRange(b, 1);
         }
 
+        private List<Location> GetBestPathToHealthPack()
+        {
+            var a = Offset.StepOffsets.Select(offset => levelView.Player.Location + offset)
+                            .Where(loc => levelView.GetHealthPackAt(loc).HasValue);
+            if (a.Any())
+                return new List<Location> { a.First() };
+            var dijkstra = Dijkstra();
+            var values = dijkstra.Item1;
+            var previous = dijkstra.Item2;
+            if (levelView.HealthPacks.Any())
+            {
+                var best = FindNearestHealthPack();
+                var min = int.MaxValue;
+                foreach (var health in levelView.HealthPacks)
+                {
+                    var healthPacks = Offset.StepOffsets.Select(offset => health.Location + offset).ToList();
+                    healthPacks.Add(health.Location);
+                    foreach (var packLoc in healthPacks)
+                    {
+                        if (values[packLoc] < min)
+                        {
+                            min = values[packLoc];
+                            best = packLoc;
+                        }
+                    }
+
+                }
+                previous[levelView.Player.Location] = best;
+                return CreatePath(previous, best);
+            }
+            return null;
+        }
+
         private class StateIdle : State<PlayerBot>
         {
             private int counter;
@@ -313,6 +396,9 @@ namespace SpurRoguelike.PlayerBot
                 if (counter >= 30)
                 {
                     counter = 0;
+                    var steps = Offset.StepOffsets.Where(offset => Self.IsPossibleForMove(Self.levelView.Player.Location + offset)).ToList();
+                    if (steps.Any())
+                        return Turn.Step(steps.ElementAt(Self.levelView.Random.Next(0, steps.Count)));
                     return Turn.None;
                 }
                 List<Location> path;
@@ -385,32 +471,20 @@ namespace SpurRoguelike.PlayerBot
                 }
                 if (monstersInAttackRange.Length > 1)
                 {
-                    var dijkstra = Self.Dijkstra();
-                    var values = dijkstra.Item1;
-                    var previous = dijkstra.Item2;
-                    if (Self.levelView.HealthPacks.Any())
-                    {
-                        var best = Self.FindNearestHealthPack();
-                        var min = int.MaxValue;
-                        foreach (var health in Self.levelView.HealthPacks)
-                        {
-                            if (values[health.Location] < min)
-                            {
-                                min = values[health.Location];
-                                best = health.Location;
-                            }
-                        }
-                        if (min < 100000)
-                        {
-                            previous[Self.levelView.Player.Location] = best;
-                            var path = Self.CreatePath(previous, best);
-                            return Turn.Step(Self.GetNextStepDirection(path));
-                        }
-                    }
                     var monsters = Self.GetAdjacentMonsters();
-                    var location = Self.GetWeakestMonster(monsters);
-                    var direction = Self.GetAttackDirectionFrom(location - Self.levelView.Player.Location);
-                    return Turn.Attack(direction);
+                    if (!Offset.StepOffsets.Any(offset => Self.levelView.Field[Self.levelView.Player.Location + offset] == CellType.Empty))
+                    {
+                        var location = Self.GetWeakestMonster(monsters);
+                        return Turn.Attack(Self.GetAttackDirectionFrom(location - Self.levelView.Player.Location));
+                    }
+
+                    var pathToHealth = Self.GetBestPathToHealthPack();
+                    if (pathToHealth != null)
+                        return Turn.Step(Self.GetNextStepDirection(pathToHealth));
+
+                    var path = Self.GetShortPath(loc => loc == Self.exit);
+                    return Turn.Step(Self.GetNextStepDirection(path));
+
                 }
                 GoToState(() => new StateIdle(Self));
                 return Self.state.Tick();
@@ -468,27 +542,11 @@ namespace SpurRoguelike.PlayerBot
                     GoToState(() => new StateIdle(Self));
                     return Self.state.Tick();
                 }
-                var dijkstra = Self.Dijkstra();
-                var costs = dijkstra.Item1;
-                var previous = dijkstra.Item2;
-                var best = Self.FindNearestHealthPack();
-                var min = int.MaxValue;
-                foreach (var health in Self.levelView.HealthPacks)
-                {
-                    if (costs[health.Location] < min)
-                    {
-                        min = costs[health.Location];
-                        best = health.Location;
-                    }
-                }
                 List<Location> path;
-                if (min < 100000)
-                {
-                    previous[Self.levelView.Player.Location] = best;
-                    path = Self.CreatePath(previous, best);
-                }
-                else
-                    path = Self.GetShortPath(loc => Self.levelView.GetHealthPackAt(loc).HasValue);
+                path = Self.GetBestPathToHealthPack();
+                if (path != null)
+                    return Turn.Step(Self.GetNextStepDirection(path));
+                path = Self.GetShortPath(loc => Self.levelView.GetHealthPackAt(loc).HasValue);
                 return path == null ? Turn.None : Turn.Step(Self.GetNextStepDirection(path));
             }
 
