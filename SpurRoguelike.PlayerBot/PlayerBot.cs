@@ -181,9 +181,9 @@ namespace SpurRoguelike.PlayerBot
                 return 100000;
 
             var cost = 1;
-            cost += CalculateWallWaves(location, 1, 60);
-            //cost += CalculateWallWaves(location, 2, 15);
-            //cost += CalculateWallWaves(location, 3, 10);
+            cost += CalculateWallWaves(location, 1, 32);
+            //cost += CalculateWallWaves(location, 2, 4);
+            //cost += CalculateWallWaves(location, 3, 2);
             cost += CalculateMonsterWaves(location);
             return cost;
         }
