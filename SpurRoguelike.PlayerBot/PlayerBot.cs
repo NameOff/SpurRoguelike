@@ -145,14 +145,7 @@ namespace SpurRoguelike.PlayerBot
         private IEnumerable<Location> GetLocationsInRange(int range, Location start)
         {
             return
-                Offset.AttackOffsets.SelectMany(
-                    offset =>
-                        new[]
-                        {
-                            new Offset(offset.XOffset*range, offset.YOffset),
-                            new Offset(offset.XOffset, offset.YOffset*range),
-                            new Offset(offset.XOffset*range, offset.YOffset*range)
-                        })
+                Offset.AttackOffsets
                         .Select(offset => start + offset)
                         .Where(IsLocationInRange)
                         .Distinct();
@@ -188,9 +181,9 @@ namespace SpurRoguelike.PlayerBot
                 return 100000;
 
             var cost = 1;
-            cost += CalculateWallWaves(location, 1, 20);
-            cost += CalculateWallWaves(location, 2, 15);
-            cost += CalculateWallWaves(location, 3, 10);
+            cost += CalculateWallWaves(location, 1, 60);
+            //cost += CalculateWallWaves(location, 2, 15);
+            //cost += CalculateWallWaves(location, 3, 10);
             cost += CalculateMonsterWaves(location);
             return cost;
         }
